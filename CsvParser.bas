@@ -12,26 +12,29 @@ Option Explicit
 '   ・エスケープ済みのダブルクォーテーションを含む文字列。
 '
 '   列数が揃っていない場合、空の要素で補完する。
-'   値に含まれない空白文字は無視される。
-'   ファイル末尾の改行は無視される。
+'   要素に含まれない空白文字は無視される。
+'   ファイル末尾の空の改行は無視される。
 '   単項演算子`+`と`-`を受け入れる。
 '   数値内の空白文字を許容しない。
-'   数値はDouble型にパースされるため、正確な数値が必要な場合は
-'   AsStringオプションをTrueにすることで文字列として取得できる。
+'   数値はDouble型にパースされる。
 
 
-Private FileNumber As Long
+'   トークナイズ中に予測される例外が発生した場合のエラーコード。
+Const TokenizeError As Long = 513
 
-
+' トークンの種類。
+' 内部の値が2桁になる場合、不正な動作を起こす。
 Private Enum TokenKind
     Str
     Num
     Emp
 End Enum
 
+'   トークナイズ中に開いたファイルの番号。
+Private FileNumber As Long
 
-Public Function ReadCsv( _
-    ByVal FilePath As String, _
+
+Public Function ParseCsv(ByVal FilePath As String, _
     Optional ByVal NumberOfSkipLines As Long) As Variant()
     ' CSVファイルを読み込み、二次元配列に変換する。
     '
@@ -44,93 +47,30 @@ Public Function ReadCsv( _
     Dim Tokens As Collection
     Set Tokens = Tokenize(FilePath, NumberOfSkipLines)
 
-    ReadCsv = To2dArray(Tokens)
+    ParseCsv = To2dArray(Tokens)
 End Function
 
 
-Private Function To2dArray(ByRef Tokens As Collection) As Variant()
-    ' トークン集合を二次元配列に変換する。
+Public Function ParseCsvAsString(ByVal FilePath As String, _
+    Optional ByVal NumberOfSkipLines As Long) As String()
+    ' CSVファイルを読み込み、文字列型の二次元配列に変換する。
+    '
+    ' 引数
+    '   FilePath: 読み込むファイルの絶対パス。
+    '   NumberOfSkipLines:
+    '       先頭から読み飛ばす行数。
+    '       読み飛ばした先が文字列中の場合、例外が発生する。
 
-    Call RemoveEmptyLinesAtEnd(Tokens)
+    Dim Tokens As Collection
+    Set Tokens = Tokenize(FilePath, NumberOfSkipLines)
 
-    Dim RowLength As Long, ColumnLength As Long
-    RowLength = Tokens.Count
-    ColumnLength = CountColumnLength(Tokens)
-
-    Dim TokensArray() As Variant
-
-    If ColumnLength = 0 Then
-        ReDim Arr(0, 0)
-        To2dArray = TokensArray
-        Exit Function
-    End If
-
-    ReDim TokensArray(RowLength - 1, ColumnLength - 1)
-
-    Dim RowIndex As Long, ColumnIndex As Long
-    For RowIndex = 1 To RowLength
-        For ColumnIndex = 1 To ColumnLength
-            If 0 < Tokens(RowIndex).Count Then
-                If Tokens(RowIndex).Count < ColumnIndex Then Exit For
-
-                Dim Token As Variant
-                Token = Tokens(RowIndex)(ColumnIndex)
-
-                Select Case Left(Token, 1)
-                    Case CStr(TokenKind.Str)
-                        Token = Right(Token, Len(Token) - 1)
-                    Case CStr(TokenKind.Num)
-                        Token = CDbl(Right(Token, Len(Token) - 1))
-                    Case CStr(TokenKind.Emp)
-                        Token = Empty
-                    End Select
-
-                TokensArray(RowIndex - 1, ColumnIndex - 1) = Token
-            End If
-        Next
-    Next
-
-    To2dArray = TokensArray
+    ParseCsvAsString = To2dStringArray(Tokens)
 End Function
 
 
-Private Function RemoveEmptyLinesAtEnd(ByRef Tokens As Collection)
-    ' トークン集合末尾の不要な改行を削除する。
-
-    Do
-        Dim Last As Collection
-        Set Last = Tokens(Tokens.Count)
-
-        If 2 < Last.Count Then
-            Exit Do
-        ElseIf Last.Count = 1 Then
-            If Last(1) = CStr(TokenKind.Emp) Then
-                Call Tokens.Remove(Tokens.Count)
-            End If
-        Else
-            Call Tokens.Remove(Tokens.Count)
-        End If
-    Loop
-End Function
-
-
-Private Function CountColumnLength(ByRef Tokens As Collection) As Long
-    ' トークン集合の列数を求める。
-
-    Dim Column As Collection
-    For Each Column In Tokens
-        If CountColumnLength < Column.Count Then
-            CountColumnLength = Column.Count
-        End If
-    Next
-End Function
-
-
-Private Function Tokenize( _
-    ByVal FilePath As String, _
+Private Function Tokenize(ByVal FilePath As String, _
     ByVal NumberOfSkipLines As Long) As Collection
     ' CSVファイルを1文字ずつ読み取り、トークン化する。
-    ' トークンには数値、文字列、カンマ、改行、空要素が存在する。
 
     Dim Tokens As New Collection
     Call Tokens.Add(New Collection)
@@ -158,7 +98,7 @@ Private Function Tokenize( _
                     Call Tokens.Add(New Collection)
                     Call SkipIfNextCharIsLf
                 Case Else
-                    Call Err.Raise(513, , _
+                    Call Err.Raise(TokenizeError, , _
                         Seek(FileNumber) & " 文字目に不正な文字 `" _
                         & Char & "` を検出しました。")
             End Select
@@ -190,7 +130,7 @@ Private Function Tokenize( _
                     Call Tokens(Tokens.Count).Add(NumberToken())
                     WaitingForDelimiter = True
                 Else
-                    Call Err.Raise(513, , _
+                    Call Err.Raise(TokenizeError, , _
                         Seek(FileNumber) & " 文字目に不正な文字 `" _
                         & Char & "` を検出しました。")
                 End If
@@ -214,7 +154,7 @@ Private Function StringToken() As String
 
     Do
         If Not NextChar(Into:=Char) Then
-            Call Err.Raise(513, , _
+            Call Err.Raise(TokenizeError, , _
                 "文字列はダブルクォーテーションで閉じる必要があります。" _
                 & vbNewLine & "検出した文字列: " & Value)
         End If
@@ -256,12 +196,12 @@ Private Function NumberToken() As String
     Loop
 
     If (Value Like "[-+.]") Or (Value Like "[-+].") Then
-        Call Err.Raise(513, , _
+        Call Err.Raise(TokenizeError, , _
             "不正な数値を検出しました。" _
             & vbNewLine & "最低でも1つの数字が必要です。" _
             & vbNewLine & "検出した数値: " & Value)
     ElseIf Value Like "*.*.*" Then
-        Call Err.Raise(513, , _
+        Call Err.Raise(TokenizeError, , _
             "不正な数値を検出しました。" _
             & vbNewLine & "小数点が複数存在します。" _
             & vbNewLine & "検出した数値: " & Value)
@@ -278,7 +218,6 @@ End Function
 
 Private Function OpenFileAsReadOnly(ByVal PathName As String)
     ' 読み取り専用でテキストファイルを開く。
-    ' 一度に全てを読み込まないことで省メモリ化を図る。
 
     FileNumber = FreeFile()
     Open PathName _
@@ -338,4 +277,121 @@ Private Function SkipIfNextCharIsLf()
     If NextChar(Char) Then
         If Char <> vbLf Then Call RewindChar
     End If
+End Function
+
+
+Private Function To2dArray(ByRef Tokens As Collection) As Variant()
+    ' トークン集合を二次元配列に変換する。
+
+    Call RemoveEmptyLinesAtEnd(Tokens)
+
+    Dim RowLength As Long, ColumnLength As Long
+    RowLength = Tokens.Count
+    ColumnLength = CountColumnLength(Tokens)
+
+    Dim TokensArray() As Variant
+
+    If ColumnLength = 0 Then
+        ReDim TokensArray(0, 0)
+        To2dArray = TokensArray
+        Exit Function
+    End If
+
+    ReDim TokensArray(RowLength - 1, ColumnLength - 1)
+
+    Dim RowIndex As Long, ColumnIndex As Long
+    For RowIndex = 1 To RowLength
+        For ColumnIndex = 1 To ColumnLength
+            If 0 < Tokens(RowIndex).Count Then
+                If Tokens(RowIndex).Count < ColumnIndex Then Exit For
+
+                Dim Token As Variant
+                Token = Tokens(RowIndex)(ColumnIndex)
+
+                Select Case Left(Token, 1)
+                    Case CStr(TokenKind.Str)
+                        Token = Right(Token, Len(Token) - 1)
+                    Case CStr(TokenKind.Num)
+                        Token = CDbl(Right(Token, Len(Token) - 1))
+                    Case CStr(TokenKind.Emp)
+                        Token = Empty
+                    End Select
+
+                TokensArray(RowIndex - 1, ColumnIndex - 1) = Token
+            End If
+        Next
+    Next
+
+    To2dArray = TokensArray
+End Function
+
+
+Private Function To2dStringArray(ByRef Tokens As Collection) As String()
+    ' トークン集合を文字列型の二次元配列に変換する。
+
+    Call RemoveEmptyLinesAtEnd(Tokens)
+
+    Dim RowLength As Long, ColumnLength As Long
+    RowLength = Tokens.Count
+    ColumnLength = CountColumnLength(Tokens)
+
+    Dim TokensArray() As String
+
+    If ColumnLength = 0 Then
+        ReDim TokensArray(0, 0)
+        TokensArray(0, 0) = ""
+        To2dStringArray = TokensArray
+        Exit Function
+    End If
+
+    ReDim TokensArray(RowLength - 1, ColumnLength - 1)
+
+    Dim RowIndex As Long, ColumnIndex As Long
+    For RowIndex = 1 To RowLength
+        For ColumnIndex = 1 To ColumnLength
+            If 0 < Tokens(RowIndex).Count Then
+                If Tokens(RowIndex).Count < ColumnIndex Then Exit For
+
+                Dim Token As String
+                Token = Tokens(RowIndex)(ColumnIndex)
+                Token = Right(Token, Len(Token) - 1)
+
+                TokensArray(RowIndex - 1, ColumnIndex - 1) = Token
+            End If
+        Next
+    Next
+
+    To2dStringArray = TokensArray
+End Function
+
+
+Private Function RemoveEmptyLinesAtEnd(ByRef Tokens As Collection)
+    ' トークン集合末尾の不要な改行を削除する。
+
+    Do
+        Dim Last As Collection
+        Set Last = Tokens(Tokens.Count)
+
+        If 2 < Last.Count Then
+            Exit Do
+        ElseIf Last.Count = 1 Then
+            If Last(1) = CStr(TokenKind.Emp) Then
+                Call Tokens.Remove(Tokens.Count)
+            End If
+        Else
+            Call Tokens.Remove(Tokens.Count)
+        End If
+    Loop
+End Function
+
+
+Private Function CountColumnLength(ByRef Tokens As Collection) As Long
+    ' トークン集合の列数を求める。
+
+    Dim Column As Collection
+    For Each Column In Tokens
+        If CountColumnLength < Column.Count Then
+            CountColumnLength = Column.Count
+        End If
+    Next
 End Function
