@@ -10,23 +10,29 @@ Attribute VB_Exposed = False
 Option Explicit
 
 
-' CSVファイルを2次元配列にパースするモジュール｡
-' ---------------------------------------------
+' CSVを2次元配列にパースするモジュール｡
+' -------------------------------------
+'
+' 数値であればDouble型へ、文字列であればString型へパースする。
+' 日付および通貨についてはサポートしていない。ただし、文字列型へ解釈された値を
+' セルに貼り付ける際、Excel側が日付及び通貨として解釈可能な文字列である場合は、
+' 動的に表示形式が変更される。
 '
 ' 数値について
 '
-'   数値はDouble型に変換される。
-'   間に半角スペースが挿入された数字はString型となる。ただし、数字の外側にしか
-'   半角スペースが存在しなければDouble型となる。
-'   またDouble型として解釈可能な場合、符号と数字の間の半角スペースは無視される。
+'   Double型へ変換可能な文字列であればDouble型へ変換される。
+'   セルに貼り付けた時に表示形式を通貨にしたい場合、先頭に通貨記号を付与した上で
+'   `"`で囲むことでDouble型へ変換されるのを防ぐことができる。
 '
-'   以下の要素はDouble型に解釈される。
-'   1,02,4.,.9,+.7,   -  6  ,"2,147,483,648"," 1,2,3 "
+'   以下の要素はDouble型になる。
+'   0,01,0.,.0,+.0,  -  0  ,"0,000","0,0,0","  000  ",$0
+'
+'   以下の要素はDobule型にならない。
+'   +-1,"1  0",-.,"$1",1.1.1
 '
 ' 文字列について
 '
-'   空文字列はEmpty値となる。
-'   タブが含まれる要素はString型となる。
+'   空文字列はEmpty値となる。また、タブが含まれる要素はString型となる。
 '   要素の1文字目に`"`が存在する場合、文字列の開始記号とみなし、要素には含めない。
 '   また、閉じ記号までの値を文字列とみなす。それ以外の箇所で`"`が使用された場合は
 '   文字列の一部とみなす。ただし、`"`で囲まれた文字列内で使用する場合はエスケープ
@@ -34,108 +40,92 @@ Option Explicit
 '   `"`の外側に存在する値は文字列の一部とみなす。その際は`"`自体も文字列とみなす。
 '   `,`および改行を文字列に含める場合、`"`で囲まなければならない。
 '
-' 日時について
-'
-'   日時はDate型に変換される。
-'
-'
-'   以下の要素はDate型に変換される。
-'   2000/01/01,2000-01-01
-'
-'   以下の要素はDate型に変換されない。
-'   2001/02/29,20001231
-'
-' 通貨について
-'
-'   通貨はCurrency型に変換される。
-'   通貨記号が単体で存在し、後方に数値が存在する場合、その値は通貨とみなされる。
-'   また、要素が`"`で囲まれており、適切に`,`で区切られていれば通貨と解釈される。
-'   ただし、Currency型で表現できない場合はString型に変換される。
-'
-'   以下の要素はCurrency型に解釈される。
-'   "1,234","$20","  \  100","6,000."  ,$.0,"$-0",+$000
-'
-'   以下の要素はCurrency型に解釈されない。
-'   "1.234",  "$20","$$50","1,000.00001","$-0,000"
-'
-'   Currency型が表現できる範囲。小数部は4桁まで。
-'   -922,337,203,685,477.5808 ～ 922,337,203,685,477.5807
-'
 ' その他の仕様
 '
-'   半角スペースは要素の一部とみなす。
-'   値が存在しない要素はEmpty値を挿入する。
 '   列数が揃っていない場合、足りない要素をEmpty値で補完する。
-'   改行コードは`\r\n`, `\r`, `\n`を使用できる。ただし、混在する場合は不正な動作を
-'   する場合がある。また、ファイル末尾の空の改行は無視される。
+'   値が存在しない要素はEmpty値を挿入する。
+'   半角スペースは要素の一部とみなす。
+'   ファイル末尾の空の改行は無視される。
+'   改行コードは`\r\n`, `\r`, `\n`を混在させることができる。ただし、`\r`の直後に
+'   `\n`が存在する場合は`\r\n`と解釈され、改行1回分となる。
 '
-'   文字セットパラメーターについては、ADODBの仕様に準ずる。
+'   文字セットパラメーターについてはADOの仕様に準ずる。
 '   Charset プロパティ (ADO)
 '   https://learn.microsoft.com/ja-jp/office/client-developer/access/desktop-database-reference/charset-property-ado
 
 
-' CSVファイルから読み込んだ文字の配列を含む構造体。
-' 字句解析の際に先頭から1文字ずつ取得していく。
-Private FileContent As String
+' 字句解析の際に先頭から1文字ずつ取得していくための文字列。
+Private CsvText As String
 
-' 字句解析中のFileContentの読み取り位置を示す。
-Private FileCursor As Long
-
-
-Private Enum TokenKind
-    StringToken
-    NumberToken
-    DateToken
-    CurrencyToken
-    EmptyToken
-End Enum
+' 字句解析中のCsvTextの読み取り位置を示す。
+Private CsvCursor As Long
 
 
 Public Function ParseCsv(ByVal FilePath As String, _
     Optional ByVal Charset As String = "UTF-8", _
     Optional ByVal SkipLinesTimes As Long) As Variant()
-    ' CSVファイルを読み込み、2次元配列に変換する。
+    ' CSVファイルを読み込み、2次元配列にパースする。
+    ' セルに貼り付ける場合はこちらのメソッドの使用を推奨する。
     '
     ' 引数
     '   FilePath: 読み込むファイルの絶対パス。
+    '   Charset: ファイルの文字セット。詳細はADOの仕様を参照。
     '   SkipLinesTimes: 先頭から読み飛ばす行数。
 
-    Dim Tokens As Collection
-    Set Tokens = Tokenize(FilePath, Charset, SkipLinesTimes)
+    Call LoadTextFile(FilePath, Charset)
+    Call SkipLines(SkipLinesTimes)
 
-    ParseCsv = To2dArray(Tokens)
+    ParseCsv = To2dArray(Tokenize())
 End Function
 
 
 Public Function ParseCsvAsString(ByVal FilePath As String, _
     Optional ByVal Charset As String = "UTF-8", _
     Optional ByVal SkipLinesTimes As Long) As String()
-    ' CSVファイルを読み込み、文字列型の2次元配列に変換する。
+    ' CSVファイルを読み込み、文字列型の2次元配列にパースする。
     '
     ' 引数
     '   FilePath: 読み込むファイルの絶対パス。
+    '   Charset: ファイルの文字セット。詳細はADOの仕様を参照。
     '   SkipLinesTimes: 先頭から読み飛ばす行数。
-
-    Dim Tokens As Collection
-    Set Tokens = Tokenize(FilePath, Charset, SkipLinesTimes)
-
-    ParseCsvAsString = To2dStringArray(Tokens)
-End Function
-
-
-' ________ CSVファイルからトークン集合を作成するための関数群 ________
-
-Private Function Tokenize(ByVal FilePath As String, _
-    ByVal Charset As String, ByVal SkipLinesTimes As Long) As Collection
-    ' FileContentを1文字ずつ読み取り、トークン化する。
 
     Call LoadTextFile(FilePath, Charset)
     Call SkipLines(SkipLinesTimes)
+
+    ParseCsvAsString = To2dStringArray(Tokenize())
+End Function
+
+
+Public Function ParseCsvFromString(ByVal Str As String) As Variant()
+    ' CSV形式の文字列を2次元配列にパースする。
+
+    CsvText = Str
+    ParseCsvFromString = To2dArray(Tokenize())
+End Function
+
+
+Public Function ParseCsvFromStringAsString(ByVal Str As String) As String()
+    ' CSV形式の文字列を文字列型の2次元配列にパースする。
+
+    CsvText = Str
+    ParseCsvFromStringAsString = To2dStringArray(Tokenize())
+End Function
+
+
+' ________ CSVファイルからトークン集合を作成するためのメソッド群 ________
+
+Private Function Tokenize() As Collection
+    ' CsvTextを1文字ずつ読み取り、トークン化する。
 
     Dim Tokens As New Collection
     Call Tokens.Add(New Collection)
 
     Dim Char As String
+
+    ' 要素の先頭1文字を読み取り、デリミタかトークンかを判断する。
+    ' デリミタであればEmpty値をトークン集合に追加する。デリミタが
+    ' 改行であればトークン集合に新しい行を追加する。
+    ' トークンであればデリミタが出現するまでトークンとして読み取る。
     Do While NextCharInto(Char)
         Select Case Char
             Case ","
@@ -166,21 +156,20 @@ End Function
 
 Private Function LoadTextFile( _
     ByVal FilePath As String, ByVal Charset As String)
-    ' テキストファイルを開き、メンバー変数FileContentにロードする。
+    ' テキストファイルを開き、メンバー変数CsvTextにロードする。
 
-    With New ADODB.Stream
+    With CreateObject("ADODB.Stream")
         .Charset = Charset
         Call .Open
         Call .LoadFromFile(FilePath)
-
-        FileContent = .ReadText()
+        CsvText = .ReadText()
         Call .Close
     End With
 End Function
 
 
 Private Function SkipLines(ByVal Times As Long)
-    ' メンバー変数FileContentから指定された行数分を読み飛ばす。
+    ' メンバー変数CsvTextから指定された行数分を読み飛ばす。
 
     Dim LineNumber As Long
     Do Until LineNumber = Times
@@ -201,13 +190,13 @@ End Function
 
 
 Private Function EndOfFile() As Boolean
-    ' FileContentの読み取り位置が終端に達していればTrueを返す。
-    EndOfFile = Len(FileContent) = FileCursor
+    ' CsvTextの読み取り位置が終端に達していればTrueを返す。
+    EndOfFile = Len(CsvText) = CsvCursor
 End Function
 
 
 Private Function NextCharInto(ByRef Char As String) As Boolean
-    ' FileContentから次の文字を読み込む。
+    ' CsvTextから次の文字を読み込む。
     '
     ' 引数
     '   Char:
@@ -220,21 +209,21 @@ Private Function NextCharInto(ByRef Char As String) As Boolean
     If EndOfFile() Then
         Char = ""
     Else
-        FileCursor = FileCursor + 1
-        Char = Mid(FileContent, FileCursor, 1)
+        CsvCursor = CsvCursor + 1
+        Char = Mid(CsvText, CsvCursor, 1)
         NextCharInto = True
     End If
 End Function
 
 
 Private Function RewindCursor(Optional Times As Long = 1)
-    ' FileContentの読み取り位置を指定された数だけ戻す。
-    FileCursor = FileCursor - Times
+    ' CsvTextの読み取り位置を指定された数だけ戻す。
+    CsvCursor = CsvCursor - Times
 End Function
 
 
 Private Function SkipIfNextCharIs(ByVal Char As String)
-    ' FileContentの次の文字が指定された文字なら読み飛ばす。
+    ' CsvTextの次の文字が指定された文字なら読み飛ばす。
 
     Dim Temp As String
     If NextCharInto(Temp) Then
@@ -249,9 +238,9 @@ Private Function TokenInto(ByRef Tokens As Collection)
     Dim Token As String
     Dim Char As String
 
-    ' 区切り文字が出現するまでトークンに文字を追加する。
+    ' デリミタが出現するまでトークンに文字を追加する。
     Do While NextCharInto(Char)
-        ' 区切り文字に該当すればトークンを確定する。
+        ' デリミタに該当すればトークンを確定する。
         Select Case Char
             Case ","
                 Call Tokens(Tokens.Count).Add(Token)
@@ -277,7 +266,7 @@ End Function
 Private Function QuotedTokenInto(ByRef Tokens As Collection)
     ' 現在の読み取り位置から要素を取り出す。
 
-    ' FileContentの終端に達していれば`"`が単体で使用されたと
+    ' CsvTextの終端に達していれば`"`が単体で使用されたと
     ' 判断し、`"`そのものをトークン化して処理を終了する。
     If EndOfFile() Then
         Call Tokens(Tokens.Count).Add("""")
@@ -296,16 +285,16 @@ Private Function QuotedTokenInto(ByRef Tokens As Collection)
 
             Select Case Char
                 Case ","
-                    ' 区切り文字のため、トークンを確定する。
+                    ' デリミタのため、トークンを確定する。
                     Exit Do
                 Case vbCr
-                    ' 区切り文字のため、トークンを確定する。
+                    ' デリミタのため、トークンを確定する。
                     Call Tokens(Tokens.Count).Add(Token)
                     Call Tokens.Add(New Collection)
                     Call SkipIfNextCharIs(vbLf)
                     Exit Function
                 Case vbLf
-                    ' 区切り文字のため、トークンを確定する。
+                    ' デリミタのため、トークンを確定する。
                     Call Tokens(Tokens.Count).Add(Token)
                     Call Tokens.Add(New Collection)
                     Exit Function
@@ -346,7 +335,7 @@ Private Function RemoveEmptyLinesAtEnd(ByRef Tokens As Collection)
 End Function
 
 
-' ________ トークン集合から2次元配列を作成するための関数群 ________
+' ________ トークン集合から2次元配列を作成するためのメソッド群 ________
 
 Private Function To2dArray(ByRef Tokens As Collection) As Variant()
     ' トークン集合を2次元配列に変換する。
@@ -374,13 +363,7 @@ Private Function To2dArray(ByRef Tokens As Collection) As Variant()
                 Dim Token As Variant
                 Token = Tokens(RowIndex)(ColumnIndex)
 
-                Select Case KindOf(Token)
-                    Case StringToken
-                        ' do nothing
-                    Case Else
-                        Stop ' 未実装。
-                End Select
-
+                Call TryCDbl(Token)
                 TokensArray(RowIndex - 1, ColumnIndex - 1) = Token
             End If
         Next
@@ -426,11 +409,11 @@ Private Function To2dStringArray(ByRef Tokens As Collection) As String()
 End Function
 
 
-Private Function KindOf(ByVal Token As Variant) As TokenKind
-    ' 文字列からトークンの種類を判定する。
+Private Function TryCDbl(ByRef Token As Variant)
+    ' Double型に変換可能であれば変換する。
 
-    ' 未実装。テスト用にすべて文字列と判定する。
-    KindOf = StringToken
+    On Error Resume Next
+    Token = CDbl(Token)
 End Function
 
 
