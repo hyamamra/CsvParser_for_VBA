@@ -1,6 +1,6 @@
 # CsvParser for VBA
 
-CSVファイルおよびCSV形式の文字列を2次元配列にパースするためのクラスです。
+CSVファイルおよびCSV形式の文字列を2次元配列にパースするためのクラスです。  
 Double型とString型をサポートしています。
 
 ### ParseCsvメソッド
@@ -27,7 +27,7 @@ End Sub
 
 UTF-8以外のファイルを読み込む場合は文字セットを指定してください。  
 使用可能な文字セットについてはADOに準拠します。
-[https://learn.microsoft.com/ja-jp/office/client-developer/access/desktop-database-reference/charset-property-ado](https://learn.microsoft.com/ja-jp/office/client-developer/access/desktop-database-reference/charset-property-ado)
+[[Charset プロパティ (ADO)](https://learn.microsoft.com/ja-jp/office/client-developer/access/desktop-database-reference/charset-property-ado)]
 
 ```vba
 ' 第2引数に文字セットを指定します。
