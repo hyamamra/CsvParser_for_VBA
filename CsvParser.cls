@@ -32,7 +32,7 @@ Option Explicit
 '
 ' 文字列について
 '
-'   空文字列はEmpty値となる。また、タブが含まれる要素はString型となる。
+'   空文字列はEmpty値となる。
 '   要素の1文字目に`"`が存在する場合、文字列の開始記号とみなし、要素には含めない。
 '   また、閉じ記号までの値を文字列とみなす。それ以外の箇所で`"`が使用された場合は
 '   文字列の一部とみなす。ただし、`"`で囲まれた文字列内で使用する場合はエスケープ
@@ -42,23 +42,32 @@ Option Explicit
 '
 ' その他の仕様
 '
-'   列数が揃っていない場合、足りない要素をEmpty値で補完する。
-'   値が存在しない要素はEmpty値を挿入する。
-'   半角スペースは要素の一部とみなす。
-'   ファイル末尾の空の改行は無視される。
-'   改行コードは`\r\n`, `\r`, `\n`を混在させることができる。ただし、`\r`の直後に
-'   `\n`が存在する場合は`\r\n`と解釈され、改行1回分となる。
+'   列数が揃っていない場合、足りない要素をEmpty値で補完する。値が存在しない要素は
+'   Empty値を挿入する。半角スペースおよびタブは要素の一部とみなす。ファイル末尾の
+'   空の改行は無視される。改行コードは`\r\n`, `\r`, `\n`を混在させることができる。
+'   ただし、`\r`の直後に`\n`が存在する場合は`\r\n`と解釈され、改行1回分となる。
 '
-'   文字セットパラメーターについてはADOの仕様に準ずる。
+'   文字セットパラメーターについてはADOの仕様に準拠する。
 '   Charset プロパティ (ADO)
 '   https://learn.microsoft.com/ja-jp/office/client-developer/access/desktop-database-reference/charset-property-ado
 
 
-' 字句解析の際に先頭から1文字ずつ取得していくための文字列。
-Private CsvText As String
+' 解析対象。
+Private Target As Target
 
-' 字句解析中のCsvTextの読み取り位置を示す。
-Private CsvCursor As Long
+
+' 字句解析の対象となるテキストの読み取り用データ。
+Private Type Target
+    ' 先頭から1文字ずつ取得していくための文字列。
+    Text As String
+    ' 字句解析中のTextの読み取り位置を示す。
+    Cursor As Long
+End Type
+
+
+Private Function NewTarget(ByVal CsvText As String) As Target
+    NewTarget.Text = CsvText
+End Function
 
 
 Public Function ParseCsv(ByVal FilePath As String, _
@@ -96,18 +105,18 @@ Public Function ParseCsvAsString(ByVal FilePath As String, _
 End Function
 
 
-Public Function ParseCsvFromString(ByVal Str As String) As Variant()
+Public Function ParseCsvFromString(ByVal CsvText As String) As Variant()
     ' CSV形式の文字列を2次元配列にパースする。
 
-    CsvText = Str
+    Target = NewTarget(CsvText)
     ParseCsvFromString = To2dArray(Tokenize())
 End Function
 
 
-Public Function ParseCsvFromStringAsString(ByVal Str As String) As String()
+Public Function ParseCsvFromStringAsString(ByVal CsvText As String) As String()
     ' CSV形式の文字列を文字列型の2次元配列にパースする。
 
-    CsvText = Str
+    Target = NewTarget(CsvText)
     ParseCsvFromStringAsString = To2dStringArray(Tokenize())
 End Function
 
@@ -115,7 +124,7 @@ End Function
 ' ________ CSVファイルからトークン集合を作成するためのメソッド群 ________
 
 Private Function Tokenize() As Collection
-    ' CsvTextを1文字ずつ読み取り、トークン化する。
+    ' メンバー変数Targetを1文字ずつ読み取り、トークン化する。
 
     Dim Tokens As New Collection
     Call Tokens.Add(New Collection)
@@ -156,20 +165,20 @@ End Function
 
 Private Function LoadTextFile( _
     ByVal FilePath As String, ByVal Charset As String)
-    ' テキストファイルを開き、メンバー変数CsvTextにロードする。
+    ' テキストファイルを開き、メンバー変数Targetにロードする。
 
     With CreateObject("ADODB.Stream")
         .Charset = Charset
         Call .Open
         Call .LoadFromFile(FilePath)
-        CsvText = .ReadText()
+        Target = NewTarget(.ReadText())
         Call .Close
     End With
 End Function
 
 
 Private Function SkipLines(ByVal Times As Long)
-    ' メンバー変数CsvTextから指定された行数分を読み飛ばす。
+    ' メンバー変数Targetから指定された行数分を読み飛ばす。
 
     Dim LineNumber As Long
     Do Until LineNumber = Times
@@ -190,13 +199,13 @@ End Function
 
 
 Private Function EndOfFile() As Boolean
-    ' CsvTextの読み取り位置が終端に達していればTrueを返す。
-    EndOfFile = Len(CsvText) = CsvCursor
+    ' メンバー変数Targetの読み取り位置が終端に達していればTrueを返す。
+    EndOfFile = Len(Target.Text) = Target.Cursor
 End Function
 
 
 Private Function NextCharInto(ByRef Char As String) As Boolean
-    ' CsvTextから次の文字を読み込む。
+    ' メンバー変数Targetから次の文字を読み込む。
     '
     ' 引数
     '   Char:
@@ -209,21 +218,21 @@ Private Function NextCharInto(ByRef Char As String) As Boolean
     If EndOfFile() Then
         Char = ""
     Else
-        CsvCursor = CsvCursor + 1
-        Char = Mid(CsvText, CsvCursor, 1)
+        Target.Cursor = Target.Cursor + 1
+        Char = Mid(Target.Text, Target.Cursor, 1)
         NextCharInto = True
     End If
 End Function
 
 
 Private Function RewindCursor(Optional Times As Long = 1)
-    ' CsvTextの読み取り位置を指定された数だけ戻す。
-    CsvCursor = CsvCursor - Times
+    ' メンバー変数Targetの読み取り位置を指定された数だけ戻す。
+    Target.Cursor = Target.Cursor - Times
 End Function
 
 
 Private Function SkipIfNextCharIs(ByVal Char As String)
-    ' CsvTextの次の文字が指定された文字なら読み飛ばす。
+    ' メンバー変数Targetの次の文字が指定された文字なら読み飛ばす。
 
     Dim Temp As String
     If NextCharInto(Temp) Then
@@ -266,7 +275,7 @@ End Function
 Private Function QuotedTokenInto(ByRef Tokens As Collection)
     ' 現在の読み取り位置から要素を取り出す。
 
-    ' CsvTextの終端に達していれば`"`が単体で使用されたと
+    ' メンバー変数Targetの終端に達していれば`"`が単体で使用されたと
     ' 判断し、`"`そのものをトークン化して処理を終了する。
     If EndOfFile() Then
         Call Tokens(Tokens.Count).Add("""")
@@ -316,21 +325,19 @@ End Function
 Private Function RemoveEmptyLinesAtEnd(ByRef Tokens As Collection)
     ' トークン集合末尾の不要な改行を削除する。
 
+    If Tokens.Count = 1 Then Exit Function
+
     Do
         Dim Line As Collection
         Set Line = Tokens(Tokens.Count)
 
-        If 2 < Line.Count Then
-            Exit Do
-        ElseIf Line.Count = 1 Then
-            If Line(1) = Empty Then
-                Call Tokens.Remove(Tokens.Count)
-            Else
-                Exit Do
-            End If
-        Else
-            Call Tokens.Remove(Tokens.Count)
+        If 2 < Line.Count Then Exit Do
+
+        If Line.Count = 1 Then
+            If Line(1) <> Empty Then Exit Do
         End If
+
+        Call Tokens.Remove(Tokens.Count)
     Loop
 End Function
 
@@ -342,7 +349,7 @@ Private Function To2dArray(ByRef Tokens As Collection) As Variant()
 
     Dim RowLength As Long, ColumnLength As Long
     RowLength = Tokens.Count
-    ColumnLength = CountColumnLength(Tokens)
+    ColumnLength = CountColumns(Tokens)
 
     Dim TokensArray() As Variant
 
@@ -378,7 +385,7 @@ Private Function To2dStringArray(ByRef Tokens As Collection) As String()
 
     Dim RowLength As Long, ColumnLength As Long
     RowLength = Tokens.Count
-    ColumnLength = CountColumnLength(Tokens)
+    ColumnLength = CountColumns(Tokens)
 
     Dim TokensArray() As String
 
@@ -417,13 +424,13 @@ Private Function TryCDbl(ByRef Token As Variant)
 End Function
 
 
-Private Function CountColumnLength(ByRef Tokens As Collection) As Long
+Private Function CountColumns(ByRef Tokens As Collection) As Long
     ' トークン集合の列数を求める。
 
     Dim Column As Collection
     For Each Column In Tokens
-        If CountColumnLength < Column.Count Then
-            CountColumnLength = Column.Count
+        If CountColumns < Column.Count Then
+            CountColumns = Column.Count
         End If
     Next
 End Function
